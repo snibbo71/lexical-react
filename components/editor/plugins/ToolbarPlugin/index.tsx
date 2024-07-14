@@ -20,7 +20,6 @@ import {
   INSERT_ORDERED_LIST_COMMAND,
   INSERT_UNORDERED_LIST_COMMAND,
   ListNode,
-  REMOVE_LIST_COMMAND,
 } from "@lexical/list";
 import { INSERT_EMBED_COMMAND } from "@lexical/react/LexicalAutoEmbedPlugin";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
@@ -39,11 +38,12 @@ import {
   $patchStyleText,
   $setBlocksType,
 } from "@lexical/selection";
-import { $isTableNode } from "@lexical/table";
+import { $isTableNode, $isTableSelection } from "@lexical/table";
 import {
   $findMatchingParent,
   $getNearestBlockElementAncestorOrThrow,
   $getNearestNodeOfType,
+  $isEditorIsNestedEditor,
   mergeRegister,
 } from "@lexical/utils";
 import {
@@ -51,7 +51,6 @@ import {
   $getNodeByKey,
   $getRoot,
   $getSelection,
-  $INTERNAL_isPointSelection,
   $isElementNode,
   $isRangeSelection,
   $isRootOrShadowRoot,
@@ -97,6 +96,7 @@ import InsertLayoutDialog from "../LayoutPlugin/InsertLayoutDialog";
 import { INSERT_PAGE_BREAK } from "../PageBreakPlugin";
 import { InsertPollDialog } from "../PollPlugin";
 import { InsertTableDialog } from "../TablePlugin";
+import FontSize from "./fontsize";
 
 const blockTypeToBlockName = {
   bullet: "Bulleted List",
@@ -122,7 +122,7 @@ function getCodeLanguageOptions(): [string, string][] {
   const options: [string, string][] = [];
 
   for (const [lang, friendlyName] of Object.entries(
-    CODE_LANGUAGE_FRIENDLY_NAME_MAP
+    CODE_LANGUAGE_FRIENDLY_NAME_MAP,
   )) {
     options.push([lang, friendlyName]);
   }
@@ -184,7 +184,7 @@ const ELEMENT_FORMAT_OPTIONS: {
   },
   right: {
     icon: "right-align",
-    iconRTL: "left-align",
+    iconRTL: "right-align",
     name: "Right Align",
   },
   start: {
@@ -195,8 +195,11 @@ const ELEMENT_FORMAT_OPTIONS: {
 };
 
 function dropDownActiveClass(active: boolean) {
-  if (active) return "active dropdown-item-active";
-  else return "";
+  if (active) {
+    return "active dropdown-item-active";
+  } else {
+    return "";
+  }
 }
 
 function BlockFormatDropDown({
@@ -213,7 +216,7 @@ function BlockFormatDropDown({
   const formatParagraph = () => {
     editor.update(() => {
       const selection = $getSelection();
-      if ($INTERNAL_isPointSelection(selection)) {
+      if ($isRangeSelection(selection)) {
         $setBlocksType(selection, () => $createParagraphNode());
       }
     });
@@ -223,9 +226,7 @@ function BlockFormatDropDown({
     if (blockType !== headingSize) {
       editor.update(() => {
         const selection = $getSelection();
-        if ($INTERNAL_isPointSelection(selection)) {
-          $setBlocksType(selection, () => $createHeadingNode(headingSize));
-        }
+        $setBlocksType(selection, () => $createHeadingNode(headingSize));
       });
     }
   };
@@ -234,7 +235,7 @@ function BlockFormatDropDown({
     if (blockType !== "bullet") {
       editor.dispatchCommand(INSERT_UNORDERED_LIST_COMMAND, undefined);
     } else {
-      editor.dispatchCommand(REMOVE_LIST_COMMAND, undefined);
+      formatParagraph();
     }
   };
 
@@ -242,7 +243,7 @@ function BlockFormatDropDown({
     if (blockType !== "check") {
       editor.dispatchCommand(INSERT_CHECK_LIST_COMMAND, undefined);
     } else {
-      editor.dispatchCommand(REMOVE_LIST_COMMAND, undefined);
+      formatParagraph();
     }
   };
 
@@ -250,7 +251,7 @@ function BlockFormatDropDown({
     if (blockType !== "number") {
       editor.dispatchCommand(INSERT_ORDERED_LIST_COMMAND, undefined);
     } else {
-      editor.dispatchCommand(REMOVE_LIST_COMMAND, undefined);
+      formatParagraph();
     }
   };
 
@@ -258,9 +259,7 @@ function BlockFormatDropDown({
     if (blockType !== "quote") {
       editor.update(() => {
         const selection = $getSelection();
-        if ($INTERNAL_isPointSelection(selection)) {
-          $setBlocksType(selection, () => $createQuoteNode());
-        }
+        $setBlocksType(selection, () => $createQuoteNode());
       });
     }
   };
@@ -270,7 +269,7 @@ function BlockFormatDropDown({
       editor.update(() => {
         let selection = $getSelection();
 
-        if ($INTERNAL_isPointSelection(selection)) {
+        if (selection !== null) {
           if (selection.isCollapsed()) {
             $setBlocksType(selection, () => $createCodeNode());
           } else {
@@ -278,8 +277,9 @@ function BlockFormatDropDown({
             const codeNode = $createCodeNode();
             selection.insertNodes([codeNode]);
             selection = $getSelection();
-            if ($isRangeSelection(selection))
+            if ($isRangeSelection(selection)) {
               selection.insertRawText(textContent);
+            }
           }
         }
       });
@@ -380,14 +380,14 @@ function FontDropDown({
     (option: string) => {
       editor.update(() => {
         const selection = $getSelection();
-        if ($INTERNAL_isPointSelection(selection)) {
+        if (selection !== null) {
           $patchStyleText(selection, {
             [style]: option,
           });
         }
       });
     },
-    [editor, style]
+    [editor, style],
   );
 
   const buttonAriaLabel =
@@ -416,7 +416,7 @@ function FontDropDown({
           >
             <span className="text">{text}</span>
           </DropDownItem>
-        )
+        ),
       )}
     </DropDown>
   );
@@ -546,7 +546,7 @@ export default function ToolbarPlugin({
   const [rootType, setRootType] =
     useState<keyof typeof rootTypeToRootName>("root");
   const [selectedElementKey, setSelectedElementKey] = useState<NodeKey | null>(
-    null
+    null,
   );
   const [fontSize, setFontSize] = useState<string>("15px");
   const [fontColor, setFontColor] = useState<string>("#000");
@@ -567,10 +567,22 @@ export default function ToolbarPlugin({
   const [isRTL, setIsRTL] = useState(false);
   const [codeLanguage, setCodeLanguage] = useState<string>("");
   const [isEditable, setIsEditable] = useState(() => editor.isEditable());
+  const [isImageCaption, setIsImageCaption] = useState(false);
 
   const $updateToolbar = useCallback(() => {
     const selection = $getSelection();
     if ($isRangeSelection(selection)) {
+      if (activeEditor !== editor && $isEditorIsNestedEditor(activeEditor)) {
+        const rootElement = activeEditor.getRootElement();
+        setIsImageCaption(
+          !!rootElement?.parentElement?.classList.contains(
+            "image-caption-container",
+          ),
+        );
+      } else {
+        setIsImageCaption(false);
+      }
+
       const anchorNode = selection.anchor.getNode();
       let element =
         anchorNode.getKey() === "root"
@@ -618,7 +630,7 @@ export default function ToolbarPlugin({
         if ($isListNode(element)) {
           const parentList = $getNearestNodeOfType<ListNode>(
             anchorNode,
-            ListNode
+            ListNode,
           );
           const type = parentList
             ? parentList.getListType()
@@ -635,35 +647,32 @@ export default function ToolbarPlugin({
             const language =
               element.getLanguage() as keyof typeof CODE_LANGUAGE_MAP;
             setCodeLanguage(
-              language ? CODE_LANGUAGE_MAP[language] || language : ""
+              language ? CODE_LANGUAGE_MAP[language] || language : "",
             );
             return;
           }
         }
       }
       // Handle buttons
-      setFontSize(
-        $getSelectionStyleValueForProperty(selection, "font-size", "15px")
-      );
       setFontColor(
-        $getSelectionStyleValueForProperty(selection, "color", "#000")
+        $getSelectionStyleValueForProperty(selection, "color", "#000"),
       );
       setBgColor(
         $getSelectionStyleValueForProperty(
           selection,
           "background-color",
-          "#fff"
-        )
+          "#fff",
+        ),
       );
       setFontFamily(
-        $getSelectionStyleValueForProperty(selection, "font-family", "Arial")
+        $getSelectionStyleValueForProperty(selection, "font-family", "Arial"),
       );
       let matchingParent;
       if ($isLinkNode(parent)) {
         // If node is a link, we need to fetch the parent paragraph node to set format
         matchingParent = $findMatchingParent(
           node,
-          (parentNode) => $isElementNode(parentNode) && !parentNode.isInline()
+          (parentNode) => $isElementNode(parentNode) && !parentNode.isInline(),
         );
       }
 
@@ -673,22 +682,33 @@ export default function ToolbarPlugin({
           ? matchingParent.getFormatType()
           : $isElementNode(node)
             ? node.getFormatType()
-            : parent?.getFormatType() || "left"
+            : parent?.getFormatType() || "left",
       );
     }
-  }, [activeEditor]);
+    if ($isRangeSelection(selection) || $isTableSelection(selection)) {
+      setFontSize(
+        $getSelectionStyleValueForProperty(selection, "font-size", "15px"),
+      );
+    }
+  }, [activeEditor, editor]);
 
   useEffect(() => {
     return editor.registerCommand(
       SELECTION_CHANGE_COMMAND,
       (_payload, newEditor) => {
-        $updateToolbar();
         setActiveEditor(newEditor);
+        $updateToolbar();
         return false;
       },
-      COMMAND_PRIORITY_CRITICAL
+      COMMAND_PRIORITY_CRITICAL,
     );
   }, [editor, $updateToolbar]);
+
+  useEffect(() => {
+    activeEditor.getEditorState().read(() => {
+      $updateToolbar();
+    });
+  }, [activeEditor, $updateToolbar]);
 
   useEffect(() => {
     return mergeRegister(
@@ -706,7 +726,7 @@ export default function ToolbarPlugin({
           setCanUndo(payload);
           return false;
         },
-        COMMAND_PRIORITY_CRITICAL
+        COMMAND_PRIORITY_CRITICAL,
       ),
       activeEditor.registerCommand<boolean>(
         CAN_REDO_COMMAND,
@@ -714,8 +734,8 @@ export default function ToolbarPlugin({
           setCanRedo(payload);
           return false;
         },
-        COMMAND_PRIORITY_CRITICAL
-      )
+        COMMAND_PRIORITY_CRITICAL,
+      ),
     );
   }, [$updateToolbar, activeEditor, editor]);
 
@@ -728,41 +748,45 @@ export default function ToolbarPlugin({
 
         if (code === "KeyK" && (ctrlKey || metaKey)) {
           event.preventDefault();
+          let url: string | null;
           if (!isLink) {
             setIsLinkEditMode(true);
+            url = sanitizeUrl("https://");
           } else {
             setIsLinkEditMode(false);
+            url = null;
           }
-          return activeEditor.dispatchCommand(
-            TOGGLE_LINK_COMMAND,
-            sanitizeUrl("https://")
-          );
+          return activeEditor.dispatchCommand(TOGGLE_LINK_COMMAND, url);
         }
         return false;
       },
-      COMMAND_PRIORITY_NORMAL
+      COMMAND_PRIORITY_NORMAL,
     );
   }, [activeEditor, isLink, setIsLinkEditMode]);
 
   const applyStyleText = useCallback(
-    (styles: Record<string, string>) => {
-      activeEditor.update(() => {
-        const selection = $getSelection();
-        if ($INTERNAL_isPointSelection(selection)) {
-          $patchStyleText(selection, styles);
-        }
-      });
+    (styles: Record<string, string>, skipHistoryStack?: boolean) => {
+      activeEditor.update(
+        () => {
+          const selection = $getSelection();
+          if (selection !== null) {
+            $patchStyleText(selection, styles);
+          }
+        },
+        skipHistoryStack ? { tag: "historic" } : {},
+      );
     },
-    [activeEditor]
+    [activeEditor],
   );
 
   const clearFormatting = useCallback(() => {
     activeEditor.update(() => {
       const selection = $getSelection();
-      if ($isRangeSelection(selection)) {
+      if ($isRangeSelection(selection) || $isTableSelection(selection)) {
         const anchor = selection.anchor;
         const focus = selection.focus;
         const nodes = selection.getNodes();
+        const extractedNodes = selection.extract();
 
         if (anchor.key === focus.key && anchor.offset === focus.offset) {
           return;
@@ -772,20 +796,35 @@ export default function ToolbarPlugin({
           // We split the first and last node by the selection
           // So that we don't format unselected text inside those nodes
           if ($isTextNode(node)) {
+            // Use a separate variable to ensure TS does not lose the refinement
+            let textNode = node;
             if (idx === 0 && anchor.offset !== 0) {
-              node = node.splitText(anchor.offset)[1] || node;
+              textNode = textNode.splitText(anchor.offset)[1] || textNode;
             }
             if (idx === nodes.length - 1) {
-              node = node.splitText(focus.offset)[0] || node;
+              textNode = textNode.splitText(focus.offset)[0] || textNode;
+            }
+            /**
+             * If the selected text has one format applied
+             * selecting a portion of the text, could
+             * clear the format to the wrong portion of the text.
+             *
+             * The cleared text is based on the length of the selected text.
+             */
+            // We need this in case the selected text only has one format
+            const extractedTextNode = extractedNodes[0];
+            if (nodes.length === 1 && $isTextNode(extractedTextNode)) {
+              textNode = extractedTextNode;
             }
 
-            if (node.__style !== "") {
-              node.setStyle("");
+            if (textNode.__style !== "") {
+              textNode.setStyle("");
             }
-            if (node.__format !== 0) {
-              node.setFormat(0);
-              $getNearestBlockElementAncestorOrThrow(node).setFormat("");
+            if (textNode.__format !== 0) {
+              textNode.setFormat(0);
+              $getNearestBlockElementAncestorOrThrow(textNode).setFormat("");
             }
+            node = textNode;
           } else if ($isHeadingNode(node) || $isQuoteNode(node)) {
             node.replace($createParagraphNode(), true);
           } else if ($isDecoratorBlockNode(node)) {
@@ -797,26 +836,31 @@ export default function ToolbarPlugin({
   }, [activeEditor]);
 
   const onFontColorSelect = useCallback(
-    (value: string) => {
-      applyStyleText({ color: value });
+    (value: string, skipHistoryStack: boolean) => {
+      applyStyleText({ color: value }, skipHistoryStack);
     },
-    [applyStyleText]
+    [applyStyleText],
   );
 
   const onBgColorSelect = useCallback(
-    (value: string) => {
-      applyStyleText({ "background-color": value });
+    (value: string, skipHistoryStack: boolean) => {
+      applyStyleText({ "background-color": value }, skipHistoryStack);
     },
-    [applyStyleText]
+    [applyStyleText],
   );
 
   const insertLink = useCallback(() => {
     if (!isLink) {
-      editor.dispatchCommand(TOGGLE_LINK_COMMAND, sanitizeUrl("https://"));
+      setIsLinkEditMode(true);
+      activeEditor.dispatchCommand(
+        TOGGLE_LINK_COMMAND,
+        sanitizeUrl("https://"),
+      );
     } else {
-      editor.dispatchCommand(TOGGLE_LINK_COMMAND, null);
+      setIsLinkEditMode(false);
+      activeEditor.dispatchCommand(TOGGLE_LINK_COMMAND, null);
     }
-  }, [editor, isLink]);
+  }, [activeEditor, isLink, setIsLinkEditMode]);
 
   const onCodeLanguageSelect = useCallback(
     (value: string) => {
@@ -829,11 +873,14 @@ export default function ToolbarPlugin({
         }
       });
     },
-    [activeEditor, selectedElementKey]
+    [activeEditor, selectedElementKey],
   );
   const insertGifOnClick = (payload: InsertImagePayload) => {
     activeEditor.dispatchCommand(INSERT_IMAGE_COMMAND, payload);
   };
+
+  const canViewerSeeInsertDropdown = !isImageCaption;
+  const canViewerSeeInsertCodeButton = !isImageCaption;
 
   return (
     <div className="toolbar">
@@ -868,7 +915,7 @@ export default function ToolbarPlugin({
             disabled={!isEditable}
             blockType={blockType}
             rootType={rootType}
-            editor={editor}
+            editor={activeEditor}
           />
           <Divider />
         </>
@@ -884,7 +931,7 @@ export default function ToolbarPlugin({
             return (
               <DropDownItem
                 className={`item ${dropDownActiveClass(
-                  value === codeLanguage
+                  value === codeLanguage,
                 )}`}
                 onClick={() => onCodeLanguageSelect(value)}
                 key={value}
@@ -900,13 +947,13 @@ export default function ToolbarPlugin({
             disabled={!isEditable}
             style={"font-family"}
             value={fontFamily}
-            editor={editor}
+            editor={activeEditor}
           />
-          <FontDropDown
+          <Divider />
+          <FontSize
+            selectionFontSize={fontSize.slice(0, -2)}
+            editor={activeEditor}
             disabled={!isEditable}
-            style={"font-size"}
-            value={fontSize}
-            editor={editor}
           />
           <Divider />
           <button
@@ -951,18 +998,20 @@ export default function ToolbarPlugin({
           >
             <i className="format underline" />
           </button>
-          <button
-            disabled={!isEditable}
-            onClick={() => {
-              activeEditor.dispatchCommand(FORMAT_TEXT_COMMAND, "code");
-            }}
-            className={"toolbar-item spaced " + (isCode ? "active" : "")}
-            title="Insert code block"
-            type="button"
-            aria-label="Insert code block"
-          >
-            <i className="format code" />
-          </button>
+          {canViewerSeeInsertCodeButton && (
+            <button
+              disabled={!isEditable}
+              onClick={() => {
+                activeEditor.dispatchCommand(FORMAT_TEXT_COMMAND, "code");
+              }}
+              className={"toolbar-item spaced " + (isCode ? "active" : "")}
+              title="Insert code block"
+              type="button"
+              aria-label="Insert code block"
+            >
+              <i className="format code" />
+            </button>
+          )}
           <button
             disabled={!isEditable}
             onClick={insertLink}
@@ -1002,7 +1051,7 @@ export default function ToolbarPlugin({
               onClick={() => {
                 activeEditor.dispatchCommand(
                   FORMAT_TEXT_COMMAND,
-                  "strikethrough"
+                  "strikethrough",
                 );
               }}
               className={"item " + dropDownActiveClass(isStrikethrough)}
@@ -1027,7 +1076,7 @@ export default function ToolbarPlugin({
               onClick={() => {
                 activeEditor.dispatchCommand(
                   FORMAT_TEXT_COMMAND,
-                  "superscript"
+                  "superscript",
                 );
               }}
               className={"item " + dropDownActiveClass(isSuperscript)}
@@ -1047,198 +1096,184 @@ export default function ToolbarPlugin({
               <span className="text">Clear Formatting</span>
             </DropDownItem>
           </DropDown>
-          <Divider />
-          {rootType === "table" && (
+          {canViewerSeeInsertDropdown && (
             <>
+              <Divider />
               <DropDown
                 disabled={!isEditable}
                 buttonClassName="toolbar-item spaced"
-                buttonLabel="Table"
-                buttonAriaLabel="Open table toolkit"
-                buttonIconClassName="icon table secondary"
+                buttonLabel="Insert"
+                buttonAriaLabel="Insert specialized editor node"
+                buttonIconClassName="icon plus"
               >
                 <DropDownItem
                   onClick={() => {
-                    /**/
+                    activeEditor.dispatchCommand(
+                      INSERT_HORIZONTAL_RULE_COMMAND,
+                      undefined,
+                    );
                   }}
                   className="item"
                 >
-                  <span className="text">TODO</span>
+                  <i className="icon horizontal-rule" />
+                  <span className="text">Horizontal Rule</span>
                 </DropDownItem>
+                <DropDownItem
+                  onClick={() => {
+                    activeEditor.dispatchCommand(INSERT_PAGE_BREAK, undefined);
+                  }}
+                  className="item"
+                >
+                  <i className="icon page-break" />
+                  <span className="text">Page Break</span>
+                </DropDownItem>
+                <DropDownItem
+                  onClick={() => {
+                    showModal("Insert Image", (onClose) => (
+                      <InsertImageDialog
+                        activeEditor={activeEditor}
+                        onClose={onClose}
+                      />
+                    ));
+                  }}
+                  className="item"
+                >
+                  <i className="icon image" />
+                  <span className="text">Image</span>
+                </DropDownItem>
+                <DropDownItem
+                  onClick={() => {
+                    showModal("Insert Inline Image", (onClose) => (
+                      <InsertInlineImageDialog
+                        activeEditor={activeEditor}
+                        onClose={onClose}
+                      />
+                    ));
+                  }}
+                  className="item"
+                >
+                  <i className="icon image" />
+                  <span className="text">Inline Image</span>
+                </DropDownItem>
+                <DropDownItem
+                  onClick={() => {
+                    activeEditor.dispatchCommand(
+                      INSERT_EXCALIDRAW_COMMAND,
+                      undefined,
+                    );
+                  }}
+                  className="item"
+                >
+                  <i className="icon diagram-2" />
+                  <span className="text">Excalidraw</span>
+                </DropDownItem>
+                <DropDownItem
+                  onClick={() => {
+                    showModal("Insert Table", (onClose) => (
+                      <InsertTableDialog
+                        activeEditor={activeEditor}
+                        onClose={onClose}
+                      />
+                    ));
+                  }}
+                  className="item"
+                >
+                  <i className="icon table" />
+                  <span className="text">Table</span>
+                </DropDownItem>
+                <DropDownItem
+                  onClick={() => {
+                    showModal("Insert Poll", (onClose) => (
+                      <InsertPollDialog
+                        activeEditor={activeEditor}
+                        onClose={onClose}
+                      />
+                    ));
+                  }}
+                  className="item"
+                >
+                  <i className="icon poll" />
+                  <span className="text">Poll</span>
+                </DropDownItem>
+                <DropDownItem
+                  onClick={() => {
+                    showModal("Insert Columns Layout", (onClose) => (
+                      <InsertLayoutDialog
+                        activeEditor={activeEditor}
+                        onClose={onClose}
+                      />
+                    ));
+                  }}
+                  className="item"
+                >
+                  <i className="icon columns" />
+                  <span className="text">Columns Layout</span>
+                </DropDownItem>
+
+                <DropDownItem
+                  onClick={() => {
+                    showModal("Insert Equation", (onClose) => (
+                      <InsertEquationDialog
+                        activeEditor={activeEditor}
+                        onClose={onClose}
+                      />
+                    ));
+                  }}
+                  className="item"
+                >
+                  <i className="icon equation" />
+                  <span className="text">Equation</span>
+                </DropDownItem>
+                <DropDownItem
+                  onClick={() => {
+                    editor.update(() => {
+                      const root = $getRoot();
+                      const stickyNode = $createStickyNode(0, 0);
+                      root.append(stickyNode);
+                    });
+                  }}
+                  className="item"
+                >
+                  <i className="icon sticky" />
+                  <span className="text">Sticky Note</span>
+                </DropDownItem>
+                <DropDownItem
+                  onClick={() => {
+                    editor.dispatchCommand(
+                      INSERT_COLLAPSIBLE_COMMAND,
+                      undefined,
+                    );
+                  }}
+                  className="item"
+                >
+                  <i className="icon caret-right" />
+                  <span className="text">Collapsible container</span>
+                </DropDownItem>
+                {EmbedConfigs.map((embedConfig) => (
+                  <DropDownItem
+                    key={embedConfig.type}
+                    onClick={() => {
+                      activeEditor.dispatchCommand(
+                        INSERT_EMBED_COMMAND,
+                        embedConfig.type,
+                      );
+                    }}
+                    className="item"
+                  >
+                    {embedConfig.icon}
+                    <span className="text">{embedConfig.contentName}</span>
+                  </DropDownItem>
+                ))}
               </DropDown>
-              <Divider />
             </>
           )}
-          <DropDown
-            disabled={!isEditable}
-            buttonClassName="toolbar-item spaced"
-            buttonLabel="Insert"
-            buttonAriaLabel="Insert specialized editor node"
-            buttonIconClassName="icon plus"
-          >
-            <DropDownItem
-              onClick={() => {
-                activeEditor.dispatchCommand(
-                  INSERT_HORIZONTAL_RULE_COMMAND,
-                  undefined
-                );
-              }}
-              className="item"
-            >
-              <i className="icon horizontal-rule" />
-              <span className="text">Horizontal Rule</span>
-            </DropDownItem>
-            <DropDownItem
-              onClick={() => {
-                activeEditor.dispatchCommand(INSERT_PAGE_BREAK, undefined);
-              }}
-              className="item"
-            >
-              <i className="icon page-break" />
-              <span className="text">Page Break</span>
-            </DropDownItem>
-            <DropDownItem
-              onClick={() => {
-                showModal("Insert Image", (onClose) => (
-                  <InsertImageDialog
-                    activeEditor={activeEditor}
-                    onClose={onClose}
-                  />
-                ));
-              }}
-              className="item"
-            >
-              <i className="icon image" />
-              <span className="text">Image</span>
-            </DropDownItem>
-            <DropDownItem
-              onClick={() => {
-                showModal("Insert Inline Image", (onClose) => (
-                  <InsertInlineImageDialog
-                    activeEditor={activeEditor}
-                    onClose={onClose}
-                  />
-                ));
-              }}
-              className="item"
-            >
-              <i className="icon image" />
-              <span className="text">Inline Image</span>
-            </DropDownItem>
-            <DropDownItem
-              onClick={() => {
-                activeEditor.dispatchCommand(
-                  INSERT_EXCALIDRAW_COMMAND,
-                  undefined
-                );
-              }}
-              className="item"
-            >
-              <i className="icon diagram-2" />
-              <span className="text">Excalidraw</span>
-            </DropDownItem>
-            <DropDownItem
-              onClick={() => {
-                showModal("Insert Table", (onClose) => (
-                  <InsertTableDialog
-                    activeEditor={activeEditor}
-                    onClose={onClose}
-                  />
-                ));
-              }}
-              className="item"
-            >
-              <i className="icon table" />
-              <span className="text">Table</span>
-            </DropDownItem>
-            <DropDownItem
-              onClick={() => {
-                showModal("Insert Poll", (onClose) => (
-                  <InsertPollDialog
-                    activeEditor={activeEditor}
-                    onClose={onClose}
-                  />
-                ));
-              }}
-              className="item"
-            >
-              <i className="icon poll" />
-              <span className="text">Poll</span>
-            </DropDownItem>
-            <DropDownItem
-              onClick={() => {
-                showModal("Insert Columns Layout", (onClose) => (
-                  <InsertLayoutDialog
-                    activeEditor={activeEditor}
-                    onClose={onClose}
-                  />
-                ));
-              }}
-              className="item"
-            >
-              <i className="icon columns" />
-              <span className="text">Columns Layout</span>
-            </DropDownItem>
-
-            <DropDownItem
-              onClick={() => {
-                showModal("Insert Equation", (onClose) => (
-                  <InsertEquationDialog
-                    activeEditor={activeEditor}
-                    onClose={onClose}
-                  />
-                ));
-              }}
-              className="item"
-            >
-              <i className="icon equation" />
-              <span className="text">Equation</span>
-            </DropDownItem>
-            <DropDownItem
-              onClick={() => {
-                editor.update(() => {
-                  const root = $getRoot();
-                  const stickyNode = $createStickyNode(0, 0);
-                  root.append(stickyNode);
-                });
-              }}
-              className="item"
-            >
-              <i className="icon sticky" />
-              <span className="text">Sticky Note</span>
-            </DropDownItem>
-            <DropDownItem
-              onClick={() => {
-                editor.dispatchCommand(INSERT_COLLAPSIBLE_COMMAND, undefined);
-              }}
-              className="item"
-            >
-              <i className="icon caret-right" />
-              <span className="text">Collapsible container</span>
-            </DropDownItem>
-            {EmbedConfigs.map((embedConfig) => (
-              <DropDownItem
-                key={embedConfig.type}
-                onClick={() => {
-                  activeEditor.dispatchCommand(
-                    INSERT_EMBED_COMMAND,
-                    embedConfig.type
-                  );
-                }}
-                className="item"
-              >
-                {embedConfig.icon}
-                <span className="text">{embedConfig.contentName}</span>
-              </DropDownItem>
-            ))}
-          </DropDown>
         </>
       )}
       <Divider />
       <ElementFormatDropdown
         disabled={!isEditable}
         value={elementFormat}
-        editor={editor}
+        editor={activeEditor}
         isRTL={isRTL}
       />
 

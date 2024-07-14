@@ -6,17 +6,14 @@
  *
  */
 
-import type {
-  DEPRECATED_GridCellNode,
-  ElementNode,
-  LexicalEditor,
-} from "lexical";
+import type { ElementNode, LexicalEditor } from "lexical";
 
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import useLexicalEditable from "@lexical/react/useLexicalEditable";
+import { useLexicalEditable } from "@lexical/react/useLexicalEditable";
 import {
   $deleteTableColumn__EXPERIMENTAL,
   $deleteTableRow__EXPERIMENTAL,
+  $getNodeTriplet,
   $getTableCellNodeFromLexicalNode,
   $getTableColumnIndexFromTableCellNode,
   $getTableNodeFromLexicalNodeOrThrow,
@@ -25,11 +22,14 @@ import {
   $insertTableRow__EXPERIMENTAL,
   $isTableCellNode,
   $isTableRowNode,
+  $isTableSelection,
   $unmergeCell,
-  getTableSelectionFromTableElement,
+  getTableObserverFromTableElement,
   HTMLTableElementWithWithTableSelectionState,
   TableCellHeaderStates,
   TableCellNode,
+  TableRowNode,
+  TableSelection,
 } from "@lexical/table";
 import {
   $createParagraphNode,
@@ -39,10 +39,6 @@ import {
   $isParagraphNode,
   $isRangeSelection,
   $isTextNode,
-  DEPRECATED_$getNodeTriplet,
-  DEPRECATED_$isGridCellNode,
-  DEPRECATED_$isGridSelection,
-  GridSelection,
 } from "lexical";
 import * as React from "react";
 import { ReactPortal, useCallback, useEffect, useRef, useState } from "react";
@@ -52,7 +48,7 @@ import invariant from "@/components/editor/shared/invariant";
 import useModal from "../../hooks/useModal";
 import ColorPicker from "../../ui/ColorPicker";
 
-function computeSelectionCount(selection: GridSelection): {
+function computeSelectionCount(selection: TableSelection): {
   columns: number;
   rows: number;
 } {
@@ -65,7 +61,7 @@ function computeSelectionCount(selection: GridSelection): {
 
 // This is important when merging cells as there is no good way to re-merge weird shapes (a result
 // of selecting merged cells and non-merged)
-function isGridSelectionRectangular(selection: GridSelection): boolean {
+function isTableSelectionRectangular(selection: TableSelection): boolean {
   const nodes = selection.getNodes();
   const currentRows: Array<number> = [];
   let currentRow = null;
@@ -77,7 +73,7 @@ function isGridSelectionRectangular(selection: GridSelection): boolean {
       const row = node.getParentOrThrow();
       invariant(
         $isTableRowNode(row),
-        "Expected CellNode to have a RowNode parent"
+        "Expected CellNode to have a RowNode parent",
       );
       if (currentRow !== row) {
         if (expectedColumns !== null && currentColumns !== expectedColumns) {
@@ -109,17 +105,16 @@ function $canUnmerge(): boolean {
   const selection = $getSelection();
   if (
     ($isRangeSelection(selection) && !selection.isCollapsed()) ||
-    (DEPRECATED_$isGridSelection(selection) &&
-      !selection.anchor.is(selection.focus)) ||
-    (!$isRangeSelection(selection) && !DEPRECATED_$isGridSelection(selection))
+    ($isTableSelection(selection) && !selection.anchor.is(selection.focus)) ||
+    (!$isRangeSelection(selection) && !$isTableSelection(selection))
   ) {
     return false;
   }
-  const [cell] = DEPRECATED_$getNodeTriplet(selection.anchor);
+  const [cell] = $getNodeTriplet(selection.anchor);
   return cell.__colSpan > 1 || cell.__rowSpan > 1;
 }
 
-function $cellContainsEmptyParagraph(cell: DEPRECATED_GridCellNode): boolean {
+function $cellContainsEmptyParagraph(cell: TableCellNode): boolean {
   if (cell.getChildrenSize() !== 1) {
     return false;
   }
@@ -144,11 +139,8 @@ function $selectLastDescendant(node: ElementNode): void {
 function currentCellBackgroundColor(editor: LexicalEditor): null | string {
   return editor.getEditorState().read(() => {
     const selection = $getSelection();
-    if (
-      $isRangeSelection(selection) ||
-      DEPRECATED_$isGridSelection(selection)
-    ) {
-      const [cell] = DEPRECATED_$getNodeTriplet(selection.anchor);
+    if ($isRangeSelection(selection) || $isTableSelection(selection)) {
+      const [cell] = $getNodeTriplet(selection.anchor);
       if ($isTableCellNode(cell)) {
         return cell.getBackgroundColor();
       }
@@ -163,7 +155,7 @@ type TableCellActionMenuProps = Readonly<{
   setIsMenuOpen: (isOpen: boolean) => void;
   showColorPickerModal: (
     title: string,
-    showModal: (onClose: () => void) => JSX.Element
+    showModal: (onClose: () => void) => JSX.Element,
   ) => void;
   tableCellNode: TableCellNode;
   cellMerge: boolean;
@@ -187,7 +179,7 @@ function TableActionMenu({
   const [canMergeCells, setCanMergeCells] = useState(false);
   const [canUnmergeCell, setCanUnmergeCell] = useState(false);
   const [backgroundColor, setBackgroundColor] = useState(
-    () => currentCellBackgroundColor(editor) || ""
+    () => currentCellBackgroundColor(editor) || "",
   );
 
   useEffect(() => {
@@ -208,13 +200,13 @@ function TableActionMenu({
     editor.getEditorState().read(() => {
       const selection = $getSelection();
       // Merge cells
-      if (DEPRECATED_$isGridSelection(selection)) {
+      if ($isTableSelection(selection)) {
         const currentSelectionCounts = computeSelectionCount(selection);
         updateSelectionCounts(computeSelectionCount(selection));
         setCanMergeCells(
-          isGridSelectionRectangular(selection) &&
+          isTableSelectionRectangular(selection) &&
             (currentSelectionCounts.columns > 1 ||
-              currentSelectionCounts.rows > 1)
+              currentSelectionCounts.rows > 1),
         );
       }
       // Unmerge cell
@@ -279,14 +271,14 @@ function TableActionMenu({
       if (tableCellNode.isAttached()) {
         const tableNode = $getTableNodeFromLexicalNodeOrThrow(tableCellNode);
         const tableElement = editor.getElementByKey(
-          tableNode.getKey()
+          tableNode.getKey(),
         ) as HTMLTableElementWithWithTableSelectionState;
 
         if (!tableElement) {
           throw new Error("Expected to find tableElement in DOM");
         }
 
-        const tableSelection = getTableSelectionFromTableElement(tableElement);
+        const tableSelection = getTableObserverFromTableElement(tableElement);
         if (tableSelection !== null) {
           tableSelection.clearHighlight();
         }
@@ -303,13 +295,13 @@ function TableActionMenu({
   const mergeTableCellsAtSelection = () => {
     editor.update(() => {
       const selection = $getSelection();
-      if (DEPRECATED_$isGridSelection(selection)) {
+      if ($isTableSelection(selection)) {
         const { columns, rows } = computeSelectionCount(selection);
         const nodes = selection.getNodes();
-        let firstCell: null | DEPRECATED_GridCellNode = null;
+        let firstCell: null | TableCellNode = null;
         for (let i = 0; i < nodes.length; i++) {
           const node = nodes[i];
-          if (DEPRECATED_$isGridCellNode(node)) {
+          if ($isTableCellNode(node)) {
             if (firstCell === null) {
               node.setColSpan(columns).setRowSpan(rows);
               firstCell = node;
@@ -321,7 +313,7 @@ function TableActionMenu({
               ) {
                 firstChild.remove();
               }
-            } else if (DEPRECATED_$isGridCellNode(firstCell)) {
+            } else if ($isTableCellNode(firstCell)) {
               const isEmpty = $cellContainsEmptyParagraph(node);
               if (!isEmpty) {
                 firstCell.append(...node.getChildren());
@@ -354,7 +346,7 @@ function TableActionMenu({
         onClose();
       });
     },
-    [editor, onClose]
+    [editor, onClose],
   );
 
   const insertTableColumnAtSelection = useCallback(
@@ -366,7 +358,7 @@ function TableActionMenu({
         onClose();
       });
     },
-    [editor, onClose, selectionCounts.columns]
+    [editor, onClose, selectionCounts.columns],
   );
 
   const deleteTableRowAtSelection = useCallback(() => {
@@ -431,9 +423,9 @@ function TableActionMenu({
       const tableColumnIndex =
         $getTableColumnIndexFromTableCellNode(tableCellNode);
 
-      const tableRows = tableNode.getChildren();
+      const tableRows = tableNode.getChildren<TableRowNode>();
       const maxRowsLength = Math.max(
-        ...tableRows.map((row) => row.getChildren().length)
+        ...tableRows.map((row) => row.getChildren().length),
       );
 
       if (tableColumnIndex >= maxRowsLength || tableColumnIndex < 0) {
@@ -471,21 +463,18 @@ function TableActionMenu({
     (value: string) => {
       editor.update(() => {
         const selection = $getSelection();
-        if (
-          $isRangeSelection(selection) ||
-          DEPRECATED_$isGridSelection(selection)
-        ) {
-          const [cell] = DEPRECATED_$getNodeTriplet(selection.anchor);
+        if ($isRangeSelection(selection) || $isTableSelection(selection)) {
+          const [cell] = $getNodeTriplet(selection.anchor);
           if ($isTableCellNode(cell)) {
             cell.setBackgroundColor(value);
           }
 
-          if (DEPRECATED_$isGridSelection(selection)) {
+          if ($isTableSelection(selection)) {
             const nodes = selection.getNodes();
 
             for (let i = 0; i < nodes.length; i++) {
               const node = nodes[i];
-              if (DEPRECATED_$isGridCellNode(node)) {
+              if ($isTableCellNode(node)) {
                 node.setBackgroundColor(value);
               }
             }
@@ -493,7 +482,7 @@ function TableActionMenu({
         }
       });
     },
-    [editor]
+    [editor],
   );
 
   let mergeCellButton: null | JSX.Element = null;
@@ -501,6 +490,7 @@ function TableActionMenu({
     if (canMergeCells) {
       mergeCellButton = (
         <button
+          type="button"
           className="item"
           onClick={() => mergeTableCellsAtSelection()}
           data-test-id="table-merge-cells"
@@ -511,6 +501,7 @@ function TableActionMenu({
     } else if (canUnmergeCell) {
       mergeCellButton = (
         <button
+          type="button"
           className="item"
           onClick={() => unmergeTableCellsAtSelection()}
           data-test-id="table-unmerge-cells"
@@ -532,6 +523,7 @@ function TableActionMenu({
     >
       {mergeCellButton}
       <button
+        type="button"
         className="item"
         onClick={() =>
           showColorPickerModal("Cell background color", () => (
@@ -547,6 +539,7 @@ function TableActionMenu({
       </button>
       <hr />
       <button
+        type="button"
         className="item"
         onClick={() => insertTableRowAtSelection(false)}
         data-test-id="table-insert-row-above"
@@ -558,6 +551,7 @@ function TableActionMenu({
         </span>
       </button>
       <button
+        type="button"
         className="item"
         onClick={() => insertTableRowAtSelection(true)}
         data-test-id="table-insert-row-below"
@@ -570,6 +564,7 @@ function TableActionMenu({
       </button>
       <hr />
       <button
+        type="button"
         className="item"
         onClick={() => insertTableColumnAtSelection(false)}
         data-test-id="table-insert-column-before"
@@ -583,6 +578,7 @@ function TableActionMenu({
         </span>
       </button>
       <button
+        type="button"
         className="item"
         onClick={() => insertTableColumnAtSelection(true)}
         data-test-id="table-insert-column-after"
@@ -597,6 +593,7 @@ function TableActionMenu({
       </button>
       <hr />
       <button
+        type="button"
         className="item"
         onClick={() => deleteTableColumnAtSelection()}
         data-test-id="table-delete-columns"
@@ -604,6 +601,7 @@ function TableActionMenu({
         <span className="text">Delete column</span>
       </button>
       <button
+        type="button"
         className="item"
         onClick={() => deleteTableRowAtSelection()}
         data-test-id="table-delete-rows"
@@ -611,6 +609,7 @@ function TableActionMenu({
         <span className="text">Delete row</span>
       </button>
       <button
+        type="button"
         className="item"
         onClick={() => deleteTableAtSelection()}
         data-test-id="table-delete"
@@ -618,7 +617,11 @@ function TableActionMenu({
         <span className="text">Delete table</span>
       </button>
       <hr />
-      <button className="item" onClick={() => toggleTableRowIsHeader()}>
+      <button
+        type="button"
+        className="item"
+        onClick={() => toggleTableRowIsHeader()}
+      >
         <span className="text">
           {(tableCellNode.__headerState & TableCellHeaderStates.ROW) ===
           TableCellHeaderStates.ROW
@@ -628,6 +631,7 @@ function TableActionMenu({
         </span>
       </button>
       <button
+        type="button"
         className="item"
         onClick={() => toggleTableColumnIsHeader()}
         data-test-id="table-column-header"
@@ -641,7 +645,7 @@ function TableActionMenu({
         </span>
       </button>
     </div>,
-    document.body
+    document.body,
   );
 }
 
@@ -659,12 +663,12 @@ function TableCellActionMenuContainer({
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const [tableCellNode, setTableMenuCellNode] = useState<TableCellNode | null>(
-    null
+    null,
   );
 
   const [colorPickerModal, showColorPickerModal] = useModal();
 
-  const moveMenu = useCallback(() => {
+  const $moveMenu = useCallback(() => {
     const menu = menuButtonRef.current;
     const selection = $getSelection();
     const nativeSelection = window.getSelection();
@@ -684,7 +688,7 @@ function TableCellActionMenuContainer({
       rootElement.contains(nativeSelection.anchorNode)
     ) {
       const tableCellNodeFromSelection = $getTableCellNodeFromLexicalNode(
-        selection.anchor.getNode()
+        selection.anchor.getNode(),
       );
 
       if (tableCellNodeFromSelection == null) {
@@ -693,7 +697,7 @@ function TableCellActionMenuContainer({
       }
 
       const tableCellParentNodeDOM = editor.getElementByKey(
-        tableCellNodeFromSelection.getKey()
+        tableCellNodeFromSelection.getKey(),
       );
 
       if (tableCellParentNodeDOM == null) {
@@ -710,7 +714,7 @@ function TableCellActionMenuContainer({
   useEffect(() => {
     return editor.registerUpdateListener(() => {
       editor.getEditorState().read(() => {
-        moveMenu();
+        $moveMenu();
       });
     });
   });
@@ -754,6 +758,7 @@ function TableCellActionMenuContainer({
       {tableCellNode != null && (
         <>
           <button
+            type="button"
             className="table-cell-action-button chevron-down"
             onClick={(e) => {
               e.stopPropagation();
@@ -795,6 +800,6 @@ export default function TableActionMenuPlugin({
         cellMerge={cellMerge}
       />
     ) : null,
-    anchorElem
+    anchorElem,
   );
 }
